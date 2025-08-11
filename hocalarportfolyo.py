@@ -10,8 +10,8 @@ import yfinance as yf
 if TYPE_CHECKING:
     from pandas.io.formats.style import Styler  # sadece type-check için
 
-st.set_page_config(page_title="VWAP Hedef Kontrol", layout="wide")
-st.title("VWAP Hedef Kontrol Paneli (Google Sheets + yfinance)")
+st.set_page_config(page_title="Hocalar Portföy", layout="wide")
+st.title("Hocalar Portföy Takibi")
 
 # --------- 0) EN BAŞTA: URL input + bağlan ----------
 sheet_url = st.text_input(
