@@ -1,8 +1,9 @@
-# app.py — Streamlit: Google Sheets + tvdatafeed canlı fiyatlı VWAP hedef paneli
+# app.py — Streamlit: Google Sheets + yfinance canlı fiyatlı VWAP hedef paneli
 import time
 import streamlit as st
 import pandas as pd
-from tvDatafeed import TvDatafeed, Interval
+import numpy as np
+import yfinance as yf
 
 st.set_page_config(page_title="Hocalar Portfolyo", layout="wide")
 st.title("Hocalar Hisse Portfolyo Takip Uygulaması")
@@ -28,48 +29,72 @@ def load_sheet_as_df(sheet_url: str) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-@st.cache_resource(show_spinner=False)
-def get_tv_client(username: str | None, password: str | None) -> TvDatafeed:
-    # Kullanıcı vermediyse misafir modda dene
-    if username and password:
-        return TvDatafeed(username=username, password=password)
-    return TvDatafeed()
+def to_yahoo_symbol(bist_code: str) -> str:
+    # Basit eşleme: BIST → .IS
+    code = (bist_code or "").strip().upper()
+    if not code:
+        return ""
+    if code.endswith(".IS"):
+        return code
+    return f"{code}.IS"
 
-def fetch_latest_prices(tv: TvDatafeed, tickers: list[str], exchange: str = "BIST") -> dict:
+def fetch_price_yf(symbol: str) -> float | None:
     """
-    Her sembol için mümkünse 1 dakikalık son bar kapanışını al.
-    Olmazsa günlük son kapanışa düş.
+    Önce fast_info.last_price, olmazsa 1dk bar, o da olmazsa günlük kapanışa düş.
     """
+    try:
+        tk = yf.Ticker(symbol)
+        # 1) fast_info
+        lp = None
+        try:
+            fi = tk.fast_info
+            lp = fi.get("last_price", None)
+            if lp is not None and np.isfinite(lp):
+                return float(lp)
+        except Exception:
+            pass
+
+        # 2) 1 dakikalık son bar
+        try:
+            m1 = tk.history(period="1d", interval="1m")
+            if not m1.empty and "Close" in m1.columns:
+                val = m1["Close"].dropna().iloc[-1]
+                if np.isfinite(val):
+                    return float(val)
+        except Exception:
+            pass
+
+        # 3) günlük kapanış
+        try:
+            d1 = tk.history(period="5d", interval="1d")
+            if not d1.empty and "Close" in d1.columns:
+                val = d1["Close"].dropna().iloc[-1]
+                if np.isfinite(val):
+                    return float(val)
+        except Exception:
+            pass
+    except Exception:
+        return None
+    return None
+
+def fetch_latest_prices_yf(bist_tickers: list[str]) -> dict:
     prices = {}
     progress = st.progress(0.0, text="Canlı fiyatlar çekiliyor...")
-    total = len(tickers)
-    for i, sym in enumerate(tickers, 1):
-        px = None
-        try:
-            df1 = tv.get_hist(symbol=sym, exchange=exchange, interval=Interval.in_1_minute, n_bars=1)
-            if df1 is not None and not df1.empty and "close" in df1.columns:
-                px = float(df1["close"].iloc[-1])
-        except Exception:
-            px = None
-        if px is None:
-            try:
-                dfd = tv.get_hist(symbol=sym, exchange=exchange, interval=Interval.in_daily, n_bars=1)
-                if dfd is not None and not dfd.empty and "close" in dfd.columns:
-                    px = float(dfd["close"].iloc[-1])
-            except Exception:
-                px = None
-        prices[sym] = px
-        progress.progress(i / total, text=f"{sym} fiyatı alınıyor...")
-        # hafif gecikme; çok hızlı isteklerde throttle olabilir
-        time.sleep(0.05)
+    total = len(bist_tickers)
+    for i, code in enumerate(bist_tickers, 1):
+        sym = to_yahoo_symbol(code)
+        px = fetch_price_yf(sym) if sym else None
+        prices[code] = px
+        progress.progress(i / total, text=f"{code} fiyatı alınıyor...")
+        time.sleep(0.02)  # nazikçe
     progress.empty()
     return prices
 
 def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     # Beklenen kolonlar
-    col_ticker = "Ticker"
+    col_ticker   = "Ticker"
     col_vwap_try = "AVWAP (TRY)"
-    col_vwap_eur = "AVWAP (EUR)"  # (TL olarak yazıldığını varsayıyoruz)
+    col_vwap_eur = "AVWAP (EUR)"  # (TL karşılığı yazıldığını varsayıyoruz)
 
     missing = [c for c in [col_ticker, col_vwap_try, col_vwap_eur] if c not in raw_df.columns]
     if missing:
@@ -83,13 +108,12 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     # canlı fiyatları ekle
     df["Hisse Fiyatı"] = df[col_ticker].map(live_prices)
 
-    # görünüm tablosu
     out = pd.DataFrame({
         "Hisse Adı": df[col_ticker],
         "Hisse Fiyatı": df["Hisse Fiyatı"],
         "VWAP Yüzde 30 Hedef": df[col_vwap_try] / 2.0,   # talebin: VWAP TL / 2
         "VWAP TL Hedef": df[col_vwap_try],
-        "VWAP EURO HEDEF": df[col_vwap_eur],             # bu sütunda TL karşılığı var
+        "VWAP EURO HEDEF": df[col_vwap_eur],             # bu sütunda TL karşılığı var (senin hesaplama koduna göre)
     })
     return out
 
@@ -101,9 +125,8 @@ def style_targets(display_df: pd.DataFrame) -> pd.io.formats.style.Styler:
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
 
     # hedefe ulaşma: Hisse Fiyatı >= hedef
+    p = pd.to_numeric(df[price_col], errors="coerce")
     for tgt in target_cols:
-        # sayısal karşılaştırma, NaN güvenli
-        p = pd.to_numeric(df[price_col], errors="coerce")
         h = pd.to_numeric(df[tgt], errors="coerce")
         mask = (p.notna() & h.notna() & (p >= h))
         styles.loc[mask, tgt] = "background-color: #d9f7e3"  # açık yeşil
@@ -123,12 +146,6 @@ def style_targets(display_df: pd.DataFrame) -> pd.io.formats.style.Styler:
     return styler
 
 # ---------------- UI ----------------
-with st.sidebar:
-    st.subheader("TradingView Bağlantısı (İsteğe Bağlı)")
-    tv_user = st.text_input("Kullanıcı adı", value="", type="default", help="Boş bırakılırsa misafir modda denenir")
-    tv_pass = st.text_input("Şifre", value="", type="password")
-    login = st.button("Giriş Yap")
-
 sheet_url = st.text_input(
     "Google Sheets URL",
     value="",
@@ -136,24 +153,9 @@ sheet_url = st.text_input(
 )
 connect = st.button("Bağlan", type="primary")
 
-# tv client
-tv = None
-if login:
-    tv = get_tv_client(tv_user.strip() or None, tv_pass.strip() or None)
-elif "tv_client" not in st.session_state:
-    # ilk kez: misafir modda deneyelim
-    tv = get_tv_client(None, None)
-else:
-    tv = st.session_state["tv_client"]
-
-if tv is not None:
-    st.session_state["tv_client"] = tv
-
 if connect:
     if not sheet_url.strip():
         st.error("Lütfen geçerli bir Google Sheets URL girin.")
-    elif tv is None:
-        st.error("TradingView istemcisi başlatılamadı.")
     else:
         with st.spinner("Sheet okunuyor..."):
             try:
@@ -175,7 +177,7 @@ if connect:
             st.warning("Sheet’te Ticker bulunamadı.")
             st.stop()
 
-        prices = fetch_latest_prices(tv, tickers, exchange="BIST")
+        prices = fetch_latest_prices_yf(tickers)
 
         # tabloyu kur
         try:
