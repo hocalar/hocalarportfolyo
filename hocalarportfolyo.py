@@ -280,6 +280,6 @@ except Exception as e:
     st.stop()
 
 st.success(f"Veri yüklendi ✓  (Toplam {len(display_df)} hisse)")
-st.caption("Hedefe ulaşan **hedef hücreleri** açık yeşil renkte vurgulanır.")
+st.caption("Hedefe ulaşan **hücreler** açık yeşil renkte vurgulanır.")
 styler = style_targets(display_df)
 st.dataframe(styler, use_container_width=True)
