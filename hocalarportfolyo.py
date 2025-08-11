@@ -1,4 +1,4 @@
-# app.py — Streamlit: Google Sheets + yfinance (Python 3.13 uyumlu)
+# app.py — Streamlit: Google Sheets + yfinance (Python 3.13 uyumlu, esnek başlık eşleşmesi)
 from typing import TYPE_CHECKING
 import io, re
 import requests
@@ -11,9 +11,9 @@ if TYPE_CHECKING:
     from pandas.io.formats.style import Styler  # sadece type-check için
 
 st.set_page_config(page_title="Hocalar Portföy", layout="wide")
-st.title("Hocalar Portföy")
+st.title("Hocalar Portföy Takibi")
 
-# --------- 0) EN BAŞTA: URL input + bağlan (kalıcı state) ----------
+# ----------------- 0) URL + bağlan (kalıcı state) -----------------
 if "connected" not in st.session_state:
     st.session_state.connected = False
 
@@ -36,7 +36,7 @@ if not st.session_state.get("sheet_url"):
     st.error("Geçerli bir Google Sheets URL girin.")
     st.stop()
 
-# ================== Helpers ==================
+# ----------------- Helpers -----------------
 def convert_to_csv_url(sheet_url: str) -> str:
     try:
         parts = sheet_url.split("/d/")
@@ -60,10 +60,11 @@ def convert_to_csv_url(sheet_url: str) -> str:
 def _normalize_cols(cols):
     norm = []
     for c in cols:
-        s = str(c).replace("\u00A0", " ")              # NBSP -> space
-        s = re.sub(r"\s+", " ", s).strip()             # çoklu boşlukları tekle
-        s = re.sub(r"\(\s+", "(", s)                   # '(' sonrası boşlukları sil
-        s = re.sub(r"\s+\)", ")", s)                   # ')' öncesi boşlukları sil
+        s = str(c).replace("\u00A0", " ")           # NBSP -> normal boşluk
+        s = re.sub(r"\s+", " ", s)                  # çoklu boşlukları tek boşluk
+        s = re.sub(r"\(\s+", "(", s)                # '(' sonrası boşlukları sil
+        s = re.sub(r"\s+\)", ")", s)                # ')' öncesi boşlukları sil
+        s = s.strip()
         norm.append(s)
     return norm
 
@@ -89,7 +90,7 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
     prices: dict[str, float | None] = {t: None for t in bist_tickers}
     symbols = [to_yahoo_symbol(t) for t in bist_tickers if t]
 
-    # 1) 1m son bar — toplu
+    # 1) 1m toplu
     try:
         df_m1 = yf.download(
             tickers=symbols, period="1d", interval="1m",
@@ -113,7 +114,7 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
     except Exception:
         pass
 
-    # 2) 1D kapanış — toplu (eksikler için)
+    # 2) 1D kapanış toplu (eksikler)
     missing = [b for b, px in prices.items() if px is None]
     if missing:
         try:
@@ -141,7 +142,7 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
         except Exception:
             pass
 
-    # 3) fast_info — tek tek
+    # 3) fast_info tek tek
     still = [b for b, px in prices.items() if px is None]
     for bist in still:
         sym = to_yahoo_symbol(bist)
@@ -164,28 +165,40 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
 
     return prices
 
-def _get_first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    cols = set(df.columns)
-    for c in candidates:
-        if c in cols:
-            return c
+# --- Esnek sütun bulucu (regex ile) ---
+def find_col(cols, patterns: list[str]) -> str | None:
+    for p in patterns:
+        rx = re.compile(p, flags=re.IGNORECASE)
+        for c in cols:
+            if rx.fullmatch(c):
+                return c
     return None
 
 def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     """
-    Beklenen kolonlar:
-      - Ticker
-      - AVWAP +4σ (TRY)  -> 'AVWAP +4σ'
-      - AVWAP +4σ (EUR)  -> 'AVWAP +4σ (EUR)' veya 'AVWAP +4σ(EUR)'
+    Zorunlu: Ticker
+    Hedef sütunlar (esnek):
+      TRY:  AVWAP +4σ  | AVWAP +4σ (TRY) | AVWAP(TRY)
+      EUR:  AVWAP +4σ (EUR) | AVWAP +4σ(EUR) | AVWAP (EUR)
     """
-    # Zorunlu
-    col_ticker = _get_first_present(raw_df, ["Ticker"])
+    cols = list(raw_df.columns)
+    col_ticker = find_col(cols, [r"Ticker"])
     if not col_ticker:
         raise KeyError("Beklenen kolonlar bulunamadı: ['Ticker']")
 
-    # TRY/EUR için +4σ başlık varyantlarını kabul et
-    col_vwap_try = _get_first_present(raw_df, ["AVWAP +4σ", "AVWAP +4σ (TRY)", "AVWAP+4σ", "AVWAP+4σ (TRY)"])
-    col_vwap_eur = _get_first_present(raw_df, ["AVWAP +4σ (EUR)", "AVWAP +4σ(EUR)", "AVWAP+4σ (EUR)", "AVWAP+4σ(EUR)"])
+    # +4σ TRY/EUR için esnek desenler (boşluk/parantez farkları tolere edilir)
+    col_vwap_try = find_col(cols, [
+        r"AVWAP\s*\+\s*4\s*σ",
+        r"AVWAP\s*\+\s*4\s*σ\s*\(TRY\)",
+        r"AVWAP\s*\(TRY\)",
+        r"AVWAP\s*TRY"
+    ])
+    col_vwap_eur = find_col(cols, [
+        r"AVWAP\s*\+\s*4\s*σ\s*\(EUR\)",
+        r"AVWAP\s*\+\s*4\s*σ\(EUR\)",
+        r"AVWAP\s*\(EUR\)",
+        r"AVWAP\s*EUR"
+    ])
 
     missing = []
     if not col_vwap_try:
@@ -203,7 +216,7 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     out = pd.DataFrame({
         "Hisse Adı": df[col_ticker],
         "Hisse Fiyatı": df["Hisse Fiyatı"],
-        "VWAP Yüzde 30 Hedef": df[col_vwap_try] / 2.0,   # istek: +4σ TL / 2
+        "VWAP Yüzde 30 Hedef": df[col_vwap_try] / 2.0,   # istek: TL hedef = +4σ / 2
         "VWAP TL Hedef": df[col_vwap_try],
         "VWAP EURO HEDEF": df[col_vwap_eur],
     })
@@ -246,7 +259,7 @@ def style_targets(display_df: pd.DataFrame) -> "Styler":
     )
     return styler
 
-# --------- 1) Sheet'i oku ----------
+# ----------------- 1) Sheet'i oku -----------------
 with st.spinner("Sheet okunuyor..."):
     try:
         raw_df = load_sheet_as_df(st.session_state.sheet_url)
@@ -254,16 +267,17 @@ with st.spinner("Sheet okunuyor..."):
         st.error(f"Sheet yüklenemedi: {e}")
         st.stop()
 
-# --------- 2) Hisseler listesi ----------
-all_tickers = (raw_df["Ticker"].astype(str)
-               .dropna()
-               .drop_duplicates()
-               .tolist())
+# ----------------- 2) Hisseler listesi -----------------
+if "Ticker" not in raw_df.columns:
+    st.error("Sheet’te 'Ticker' kolonunu bulamadım.")
+    st.stop()
+
+all_tickers = (raw_df["Ticker"].astype(str).dropna().drop_duplicates().tolist())
 if not all_tickers:
     st.warning("Sheet’te Ticker bulunamadı.")
     st.stop()
 
-# --------- 3) Sidebar: çoklu seçim ----------
+# ----------------- 3) Sidebar: çoklu seçim -----------------
 with st.sidebar:
     st.subheader("Hisse seçimi")
     options = sorted(all_tickers)
@@ -276,7 +290,7 @@ with st.sidebar:
 
 tickers = selected if selected else options  # boşsa hepsi
 
-# --------- 4) Fiyat indir + tablo ----------
+# ----------------- 4) Fiyat indir + tablo -----------------
 with st.spinner("Canlı fiyatlar indiriliyor..."):
     prices = download_prices_batch(tickers)
 
