@@ -1,5 +1,5 @@
 streamlit>=1.36.0
-tvdatafeed>=1.1.7
+#tvdatafeed>=1.1.7
 
 # --- Data stack ---
 pandas==2.2.2
