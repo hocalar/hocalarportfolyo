@@ -13,18 +13,29 @@ if TYPE_CHECKING:
 st.set_page_config(page_title="Hocalar Portföy", layout="wide")
 st.title("Hocalar Portföy Takibi")
 
-# --------- 0) EN BAŞTA: URL input + bağlan ----------
+# --------- 0) EN BAŞTA: URL input + bağlan (kalıcı state) ----------
+if "connected" not in st.session_state:
+    st.session_state.connected = False
+
 sheet_url = st.text_input(
     "Google Sheets URL",
-    value="",
-    placeholder="https://docs.google.com/spreadsheets/d/...."
+    value=st.session_state.get("sheet_url", ""),
+    placeholder="https://docs.google.com/spreadsheets/d/....",
+    key="sheet_url_input"
 )
-connect = st.button("Bağlan", type="primary")
 
-if not connect:
+# Bağlan butonu: basılınca kalıcı olarak connected=True
+if st.button("Bağlan", type="primary"):
+    st.session_state.connected = True
+    st.session_state.sheet_url = sheet_url.strip()
+
+# Guard: bağlanılmadıysa dur
+if not st.session_state.connected:
     st.info("Lütfen Google Sheets URL’sini girip **Bağlan**’a tıklayın.")
     st.stop()
-if not sheet_url.strip():
+
+# URL kontrolü
+if not st.session_state.get("sheet_url"):
     st.error("Geçerli bir Google Sheets URL girin.")
     st.stop()
 
@@ -216,7 +227,7 @@ def style_targets(display_df: pd.DataFrame) -> "Styler":
 # --------- 1) Sheet'i oku ----------
 with st.spinner("Sheet okunuyor..."):
     try:
-        raw_df = load_sheet_as_df(sheet_url.strip())
+        raw_df = load_sheet_as_df(st.session_state.sheet_url)
     except Exception as e:
         st.error(f"Sheet yüklenemedi: {e}")
         st.stop()
@@ -236,37 +247,27 @@ if not all_tickers:
     st.warning("Sheet’te Ticker bulunamadı.")
     st.stop()
 
-# --------- 2) Sidebar: seçim kontrolleri ----------
+# --------- 2) Sidebar: çoklu seçim ----------
 with st.sidebar:
-    st.subheader("Seçenekler")
-    max_rows = st.number_input(
-        "En fazla kaç hisse oku?",
-        min_value=5, max_value=600, value=min(80, len(all_tickers)), step=5,
-        help="Çok fazla hisse yavaşlatabilir. Gerekirse düşürün."
-    )
-
-    # Ticker seçim listesi (alfabetik)
+    st.subheader("Hisse seçimi")
     options = sorted(all_tickers)
-    default_selection = options[: min(len(options), int(max_rows))]
+
+    # Varsayılan: hepsi seçili; kullanıcı boşaltırsa ALL'a düşeceğiz (aşağıda)
     selected = st.multiselect(
         "Hisse seç (çoklu):",
         options=options,
-        default=default_selection,
-        help="Sadece seçilen hisseler için canlı fiyat indirilecek ve tablo oluşturulacak."
+        default=options,
+        help="Boş bırakırsanız tüm hisseler gösterilir."
     )
 
-# Seçim guard
-tickers = selected[: int(max_rows)] if selected else []
-if not tickers:
-    st.info("Lütfen sidebardan en az bir hisse seçin.")
-    st.stop()
+# Seçim boşsa tüm hisseleri kullan
+tickers = selected if selected else options
 
 # --------- 3) Fiyat indir + tablo ----------
 with st.spinner("Canlı fiyatlar indiriliyor..."):
     prices = download_prices_batch(tickers)
 
 try:
-    # raw_df'i sadece seçilen hisselerle sınırla
     filtered_df = raw_df[raw_df["Ticker"].astype(str).isin(tickers)].copy()
     display_df = prepare_display(filtered_df, prices)
 except Exception as e:
