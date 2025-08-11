@@ -176,49 +176,27 @@ def find_col(cols, patterns: list[str]) -> str | None:
 
 def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     """
-    Zorunlu: Ticker
-    Hedef sütunlar (esnek):
-      TRY:  AVWAP +4σ  | AVWAP +4σ (TRY) | AVWAP(TRY)
-      EUR:  AVWAP +4σ (EUR) | AVWAP +4σ(EUR) | AVWAP (EUR)
+    Zorunlu: 'Ticker', 'AVWAP HEDEF+4 (TRY)', 'AVWAP HEDEF+4 (EUR)'
     """
     cols = list(raw_df.columns)
-    col_ticker = find_col(cols, [r"Ticker"])
-    if not col_ticker:
-        raise KeyError("Beklenen kolonlar bulunamadı: ['Ticker']")
 
-    # +4σ TRY/EUR için esnek desenler (boşluk/parantez farkları tolere edilir)
-    col_vwap_try = find_col(cols, [
-        r"AVWAP\s*\+\s*4\s*σ",
-        r"AVWAP\s*\+\s*4\s*σ\s*\(TRY\)",
-        r"AVWAP\s*\(TRY\)",
-        r"AVWAP\s*TRY"
-    ])
-    col_vwap_eur = find_col(cols, [
-        r"AVWAP\s*\+\s*4\s*σ\s*\(EUR\)",
-        r"AVWAP\s*\+\s*4\s*σ\(EUR\)",
-        r"AVWAP\s*\(EUR\)",
-        r"AVWAP\s*EUR"
-    ])
-
-    missing = []
-    if not col_vwap_try:
-        missing.append("AVWAP HEDEF+4 (TRY)")
-    if not col_vwap_eur:
-        missing.append("AVWAP HEDEF+4 (EUR)")
+    # Zorunlu kolon kontrolü
+    required_cols = ["Ticker", "AVWAP HEDEF+4 (TRY)", "AVWAP HEDEF+4 (EUR)"]
+    missing = [c for c in required_cols if c not in cols]
     if missing:
         raise KeyError(f"Beklenen kolonlar bulunamadı: {missing}")
 
     df = raw_df.copy()
-    for c in [col_vwap_try, col_vwap_eur]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["Hisse Fiyatı"] = df[col_ticker].map(live_prices)
+    df["AVWAP HEDEF+4 (TRY)"] = pd.to_numeric(df["AVWAP HEDEF+4 (TRY)"], errors="coerce")
+    df["AVWAP HEDEF+4 (EUR)"] = pd.to_numeric(df["AVWAP HEDEF+4 (EUR)"], errors="coerce")
+    df["Hisse Fiyatı"] = df["Ticker"].map(live_prices)
 
     out = pd.DataFrame({
-        "Hisse Adı": df[col_ticker],
+        "Hisse Adı": df["Ticker"],
         "Hisse Fiyatı": df["Hisse Fiyatı"],
-        "VWAP Yüzde 30 Hedef": df[col_vwap_try] / 2.0,   # istek: TL hedef = +4σ / 2
-        "VWAP TL Hedef": df[col_vwap_try],
-        "VWAP EURO HEDEF": df[col_vwap_eur],
+        "VWAP Yüzde 30 Hedef": df["AVWAP HEDEF+4 (TRY)"] / 2.0,
+        "VWAP TL Hedef": df["AVWAP HEDEF+4 (TRY)"],
+        "VWAP EURO HEDEF": df["AVWAP HEDEF+4 (EUR)"],
     })
     return out
 
