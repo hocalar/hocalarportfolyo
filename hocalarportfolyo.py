@@ -167,7 +167,7 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     """
     col_ticker   = "Ticker"
     col_vwap_try = "AVWAP +4σ" #"AVWAP (TRY)"
-    col_vwap_eur = "AVWAP +4σ (EUR)" #"AVWAP (EUR)"  # TL karşılığı yazıldığı varsayımı
+    col_vwap_eur = "AVWAP +4σ(EUR)" #"AVWAP (EUR)"  # TL karşılığı yazıldığı varsayımı
 
     missing = [c for c in [col_ticker, col_vwap_try, col_vwap_eur] if c not in raw_df.columns]
     if missing:
