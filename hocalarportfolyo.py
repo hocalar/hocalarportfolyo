@@ -1,21 +1,36 @@
-# app.py — Streamlit: Google Sheets + yfinance (hızlı & dayanıklı)
+# app.py — Streamlit: Google Sheets + yfinance (Python 3.13 uyumlu)
+from typing import TYPE_CHECKING
 import io
-import time
 import requests
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+if TYPE_CHECKING:
+    from pandas.io.formats.style import Styler  # sadece type-check için
+
 st.set_page_config(page_title="VWAP Hedef Kontrol", layout="wide")
 st.title("VWAP Hedef Kontrol Paneli (Google Sheets + yfinance)")
 
+# --------- 0) EN BAŞTA: URL input + bağlan ----------
+sheet_url = st.text_input(
+    "Google Sheets URL",
+    value="",
+    placeholder="https://docs.google.com/spreadsheets/d/...."
+)
+connect = st.button("Bağlan", type="primary")
+
+if not connect:
+    st.info("Lütfen Google Sheets URL’sini girip **Bağlan**’a tıklayın.")
+    st.stop()
+if not sheet_url.strip():
+    st.error("Geçerli bir Google Sheets URL girin.")
+    st.stop()
+
 # ================== Helpers ==================
 def convert_to_csv_url(sheet_url: str) -> str:
-    """
-    Google Sheets edit URL -> CSV export URL
-    Gerekirse gid parametresini de taşır.
-    """
+    """Google Sheets edit URL -> CSV export URL (gid varsa taşır)."""
     try:
         parts = sheet_url.split("/d/")
         if len(parts) < 2:
@@ -37,10 +52,7 @@ def convert_to_csv_url(sheet_url: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sheet_as_df(sheet_url: str, timeout: float = 15.0) -> pd.DataFrame:
-    """
-    CSV'yi requests ile zaman aşımıyla indirir ve DataFrame'e yükler.
-    Paylaşım ayarı: 'Bağlantıya sahip olan herkes görüntüleyebilir' olmalı.
-    """
+    """CSV'yi requests ile indirir ve DataFrame'e yükler."""
     csv_url = convert_to_csv_url(sheet_url)
     if not csv_url:
         raise ValueError("Geçersiz Google Sheets URL")
@@ -58,25 +70,15 @@ def to_yahoo_symbol(bist_code: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=60)
 def download_prices_batch(bist_tickers: list[str]) -> dict:
-    """
-    yfinance ile hızlı fiyat indirme:
-      1) 1 dakikalık son bar (toplu)
-      2) eksiklere günlük kapanış (toplu)
-      3) kalan çok azı için fast_info (tek tek)
-    """
+    """yfinance ile hızlı fiyat indirme (1m toplu → 1d toplu → fast_info tek tek)."""
     prices: dict[str, float | None] = {t: None for t in bist_tickers}
     symbols = [to_yahoo_symbol(t) for t in bist_tickers if t]
 
     # 1) 1m son bar — toplu
     try:
         df_m1 = yf.download(
-            tickers=symbols,
-            period="1d",
-            interval="1m",
-            group_by="ticker",
-            threads=True,
-            auto_adjust=False,
-            progress=False,
+            tickers=symbols, period="1d", interval="1m",
+            group_by="ticker", threads=True, auto_adjust=False, progress=False,
         )
         if isinstance(df_m1.columns, pd.MultiIndex):
             for bist, sym in zip(bist_tickers, symbols):
@@ -87,8 +89,7 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
                         prices[bist] = float(val)
                 except Exception:
                     pass
-        elif not df_m1.empty:
-            # tek sembol
+        elif isinstance(df_m1, pd.DataFrame) and not df_m1.empty and len(bist_tickers) == 1:
             try:
                 val = df_m1["Close"].dropna().iloc[-1]
                 prices[bist_tickers[0]] = float(val)
@@ -103,13 +104,8 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
         try:
             sym_mis = [to_yahoo_symbol(b) for b in missing]
             df_d1 = yf.download(
-                tickers=sym_mis,
-                period="5d",
-                interval="1d",
-                group_by="ticker",
-                threads=True,
-                auto_adjust=False,
-                progress=False,
+                tickers=sym_mis, period="5d", interval="1d",
+                group_by="ticker", threads=True, auto_adjust=False, progress=False,
             )
             if isinstance(df_d1.columns, pd.MultiIndex):
                 for bist, sym in zip(missing, sym_mis):
@@ -120,7 +116,7 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
                             prices[bist] = float(val)
                     except Exception:
                         pass
-            elif not df_d1.empty and len(missing) == 1:
+            elif isinstance(df_d1, pd.DataFrame) and not df_d1.empty and len(missing) == 1:
                 try:
                     val = df_d1["Close"].dropna().iloc[-1]
                     if np.isfinite(val):
@@ -155,16 +151,12 @@ def download_prices_batch(bist_tickers: list[str]) -> dict:
 
 def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
     """
-    Beklenen kaynak kolonlar:
-      - Ticker
-      - AVWAP (TRY)
-      - AVWAP (EUR)   (senin hesaplama koduna göre burada TL karşılığı yazıyor)
-    Çıktı kolonları:
-      Hisse Adı, Hisse Fiyatı, VWAP Yüzde 30 Hedef, VWAP TL Hedef, VWAP EURO HEDEF
+    Beklenen kolonlar: Ticker, AVWAP (TRY), AVWAP (EUR)
+    Çıktı: Hisse Adı, Hisse Fiyatı, VWAP Yüzde 30 Hedef, VWAP TL Hedef, VWAP EURO HEDEF
     """
     col_ticker   = "Ticker"
     col_vwap_try = "AVWAP (TRY)"
-    col_vwap_eur = "AVWAP (EUR)"  # TL karşılığı (hesap EUR→TL yazıyoruz)
+    col_vwap_eur = "AVWAP (EUR)"  # TL karşılığı yazıldığı varsayımı
 
     missing = [c for c in [col_ticker, col_vwap_try, col_vwap_eur] if c not in raw_df.columns]
     if missing:
@@ -180,38 +172,48 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
         "Hisse Fiyatı": df["Hisse Fiyatı"],
         "VWAP Yüzde 30 Hedef": df[col_vwap_try] / 2.0,   # istek: VWAP TL / 2
         "VWAP TL Hedef": df[col_vwap_try],
-        "VWAP EURO HEDEF": df[col_vwap_eur],             # TL yazıldığı varsayımı
+        "VWAP EURO HEDEF": df[col_vwap_eur],
     })
     return out
 
-def style_targets(display_df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def style_targets(display_df: pd.DataFrame) -> "Styler":
     price_col = "Hisse Fiyatı"
     target_cols = ["VWAP Yüzde 30 Hedef", "VWAP TL Hedef", "VWAP EURO HEDEF"]
-
     df = display_df.copy()
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
 
-    p = pd.to_numeric(df[price_col], errors="coerce")
-    for tgt in target_cols:
-        h = pd.to_numeric(df[tgt], errors="coerce")
-        mask = (p.notna() & h.notna() & (p >= h))
-        styles.loc[mask, tgt] = "background-color: #d9f7e3"  # açık yeşil
+    def _row_style(row: pd.Series):
+        styles = []
+        price = pd.to_numeric(row.get(price_col), errors="coerce")
+        for col in df.columns:
+            if col in target_cols:
+                tgt = pd.to_numeric(row.get(col), errors="coerce")
+                if pd.notna(price) and pd.notna(tgt) and price >= tgt:
+                    styles.append("background-color: #d9f7e3")
+                else:
+                    styles.append("")
+            else:
+                styles.append("")
+        return styles
 
-    styler = df.style.format({
-        "Hisse Fiyatı": "{:,.2f}",
-        "VWAP Yüzde 30 Hedef": "{:,.2f}",
-        "VWAP TL Hedef": "{:,.2f}",
-        "VWAP EURO HEDEF": "{:,.2f}",
-    }).set_properties(subset=target_cols, **{"border": "1px solid #eee"}) \
-     .set_table_styles([
-        {"selector": "th", "props": [("text-align", "left")]},
-        {"selector": "td", "props": [("text-align", "right")]},
-        {"selector": "th.col_heading.level0", "props": [("text-align", "left")]}
-     ])
-    styler = styler.set_td_classes(styles)
+    styler = (
+        df.style
+          .format({
+              "Hisse Fiyatı": "{:,.2f}",
+              "VWAP Yüzde 30 Hedef": "{:,.2f}",
+              "VWAP TL Hedef": "{:,.2f}",
+              "VWAP EURO HEDEF": "{:,.2f}",
+          })
+          .set_properties(subset=target_cols, **{"border": "1px solid #eee"})
+          .set_table_styles([
+              {"selector": "th", "props": [("text-align", "left")]},
+              {"selector": "td", "props": [("text-align", "right")]},
+              {"selector": "th.col_heading.level0", "props": [("text-align", "left")]},
+          ])
+          .apply(lambda r: _row_style(r), axis=1)
+    )
     return styler
 
-# ================== UI ==================
+# --------- 1) Sidebar ve diğer UI şimdi geliyor ----------
 with st.sidebar:
     st.subheader("Seçenekler")
     max_rows = st.number_input(
@@ -220,22 +222,7 @@ with st.sidebar:
         help="Çok fazla hisse yavaşlatabilir. Gerekirse düşürün."
     )
 
-# URL girişini EN BAŞTA sor ve onay almadan durdur
-sheet_url = st.text_input(
-    "Google Sheets URL",
-    value="",
-    placeholder="https://docs.google.com/spreadsheets/d/...."
-)
-connect = st.button("Bağlan", type="primary")
-
-if not connect:
-    st.info("Lütfen Google Sheets URL’sini girip **Bağlan**’a tıklayın.")
-    st.stop()
-if not sheet_url.strip():
-    st.error("Geçerli bir Google Sheets URL girin.")
-    st.stop()
-
-# ---- Bağlandıktan sonra akış ----
+# --------- 2) İş akışı ----------
 with st.spinner("Sheet okunuyor..."):
     try:
         raw_df = load_sheet_as_df(sheet_url.strip())
@@ -261,7 +248,6 @@ if not tickers:
 with st.spinner("Canlı fiyatlar indiriliyor..."):
     prices = download_prices_batch(tickers)
 
-# Tabloyu oluştur + stil uygula
 try:
     display_df = prepare_display(raw_df, prices)
 except Exception as e:
