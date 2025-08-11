@@ -68,6 +68,33 @@ def _normalize_cols(cols):
         norm.append(s)
     return norm
 
+def _to_float_series_tr(s: pd.Series) -> pd.Series:
+    # str'e çevir, gizli boşlukları ve para/işaret metinlerini temizle
+    s = (s.astype(str)
+           .str.replace("\u00A0", " ", regex=False)
+           .str.strip()
+           .str.replace(r"[^\d,.\-]", "", regex=True))  # sadece 0-9 . , - kalsın
+
+    def _one(v: str) -> float | None:
+        if v == "" or v == "-" or v == "." or v == ",":
+            return np.nan
+        # Hem nokta hem virgül varsa: son görüneni ondalık say
+        if "," in v and "." in v:
+            if v.rfind(",") > v.rfind("."):  # TR tarzı: 1.234,56
+                v = v.replace(".", "").replace(",", ".")
+            else:                            # US tarzı: 1,234.56
+                v = v.replace(",", "")
+        elif "," in v and "." not in v:      # Sadece virgül: 123,45 -> 123.45
+            v = v.replace(",", ".")
+        else:                                # Sadece nokta ya da düz rakam
+            v = v
+        try:
+            return float(v)
+        except Exception:
+            return np.nan
+
+    return s.map(_one)
+    
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sheet_as_df(sheet_url: str, timeout: float = 15.0) -> pd.DataFrame:
     csv_url = convert_to_csv_url(sheet_url)
@@ -187,8 +214,10 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
         raise KeyError(f"Beklenen kolonlar bulunamadı: {missing}")
 
     df = raw_df.copy()
-    df["AVWAP HEDEF+4 (TRY)"] = pd.to_numeric(df["AVWAP HEDEF+4 (TRY)"], errors="coerce")
-    df["AVWAP HEDEF+4 (EUR)"] = pd.to_numeric(df["AVWAP HEDEF+4 (EUR)"], errors="coerce")
+    df["AVWAP HEDEF+4 (TRY)"] = _to_float_series_tr(df["AVWAP HEDEF+4 (TRY)"])
+    df["AVWAP HEDEF+4 (EUR)"] = _to_float_series_tr(df["AVWAP HEDEF+4 (EUR)"])
+    #df["AVWAP HEDEF+4 (TRY)"] = pd.to_numeric(df["AVWAP HEDEF+4 (TRY)"], errors="coerce")
+    #df["AVWAP HEDEF+4 (EUR)"] = pd.to_numeric(df["AVWAP HEDEF+4 (EUR)"], errors="coerce")
     df["Hisse Fiyatı"] = df["Ticker"].map(live_prices)
 
     out = pd.DataFrame({
