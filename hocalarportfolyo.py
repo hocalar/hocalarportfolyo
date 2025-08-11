@@ -213,16 +213,7 @@ def style_targets(display_df: pd.DataFrame) -> "Styler":
     )
     return styler
 
-# --------- 1) Sidebar ve diğer UI şimdi geliyor ----------
-with st.sidebar:
-    st.subheader("Seçenekler")
-    max_rows = st.number_input(
-        "En fazla kaç hisse oku?",
-        min_value=5, max_value=600, value=80, step=5,
-        help="Çok fazla hisse yavaşlatabilir. Gerekirse düşürün."
-    )
-
-# --------- 2) İş akışı ----------
+# --------- 1) Sheet'i oku ----------
 with st.spinner("Sheet okunuyor..."):
     try:
         raw_df = load_sheet_as_df(sheet_url.strip())
@@ -236,25 +227,53 @@ if miss:
     st.error(f"Sheet’te beklenen kolonlar yok: {miss}")
     st.stop()
 
-tickers = (raw_df["Ticker"].astype(str)
-           .dropna()
-           .drop_duplicates()
-           .head(int(max_rows))
-           .tolist())
-if not tickers:
+all_tickers = (raw_df["Ticker"].astype(str)
+               .dropna()
+               .drop_duplicates()
+               .tolist())
+
+if not all_tickers:
     st.warning("Sheet’te Ticker bulunamadı.")
     st.stop()
 
+# --------- 2) Sidebar: seçim kontrolleri ----------
+with st.sidebar:
+    st.subheader("Seçenekler")
+    max_rows = st.number_input(
+        "En fazla kaç hisse oku?",
+        min_value=5, max_value=600, value=min(80, len(all_tickers)), step=5,
+        help="Çok fazla hisse yavaşlatabilir. Gerekirse düşürün."
+    )
+
+    # Ticker seçim listesi (alfabetik)
+    options = sorted(all_tickers)
+    default_selection = options[: min(len(options), int(max_rows))]
+    selected = st.multiselect(
+        "Hisse seç (çoklu):",
+        options=options,
+        default=default_selection,
+        help="Sadece seçilen hisseler için canlı fiyat indirilecek ve tablo oluşturulacak."
+    )
+
+# Seçim guard
+tickers = selected[: int(max_rows)] if selected else []
+if not tickers:
+    st.info("Lütfen sidebardan en az bir hisse seçin.")
+    st.stop()
+
+# --------- 3) Fiyat indir + tablo ----------
 with st.spinner("Canlı fiyatlar indiriliyor..."):
     prices = download_prices_batch(tickers)
 
 try:
-    display_df = prepare_display(raw_df, prices)
+    # raw_df'i sadece seçilen hisselerle sınırla
+    filtered_df = raw_df[raw_df["Ticker"].astype(str).isin(tickers)].copy()
+    display_df = prepare_display(filtered_df, prices)
 except Exception as e:
     st.error(f"Kolon eşleme/hesaplama hatası: {e}")
     st.stop()
 
-st.success("Veri yüklendi ✓")
+st.success(f"Veri yüklendi ✓  (Toplam {len(display_df)} hisse)")
 st.caption("Hedefe ulaşan **hedef hücreleri** açık yeşil renkte vurgulanır.")
 styler = style_targets(display_df)
 st.dataframe(styler, use_container_width=True)
