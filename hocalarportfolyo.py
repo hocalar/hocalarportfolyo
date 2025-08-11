@@ -218,7 +218,7 @@ with st.sidebar:
     st.subheader("Seçenekler")
     max_rows = st.number_input(
         "En fazla kaç hisse oku?",
-        min_value=5, max_value=300, value=80, step=5,
+        min_value=5, max_value=600, value=80, step=5,
         help="Çok fazla hisse yavaşlatabilir. Gerekirse düşürün."
     )
 
