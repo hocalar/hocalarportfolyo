@@ -202,9 +202,9 @@ def prepare_display(raw_df: pd.DataFrame, live_prices: dict) -> pd.DataFrame:
 
     missing = []
     if not col_vwap_try:
-        missing.append("AVWAP +4σ (TRY)")
+        missing.append("AVWAP HEDEF+4 (TRY)")
     if not col_vwap_eur:
-        missing.append("AVWAP +4σ (EUR)")
+        missing.append("AVWAP HEDEF+4 (EUR)")
     if missing:
         raise KeyError(f"Beklenen kolonlar bulunamadı: {missing}")
 
