@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pandas.io.formats.style import Styler  # sadece type-check için
 
 st.set_page_config(page_title="Hocalar Portföy", layout="wide")
-st.title("Hocalar Portföy Takibi")
+st.title("Hocalar Portföy")
 
 # ----------------- 0) URL + bağlan (kalıcı state) -----------------
 if "connected" not in st.session_state:
