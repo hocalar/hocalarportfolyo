@@ -232,7 +232,7 @@ with st.spinner("Sheet okunuyor..."):
         st.error(f"Sheet yüklenemedi: {e}")
         st.stop()
 
-needed_cols = ["Ticker", "AVWAP (TRY)", "AVWAP (EUR)"]
+needed_cols = ["Ticker", "AVWAP +4σ", "AVWAP +4σ(EUR)"]
 miss = [c for c in needed_cols if c not in raw_df.columns]
 if miss:
     st.error(f"Sheet’te beklenen kolonlar yok: {miss}")
